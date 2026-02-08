@@ -35,6 +35,26 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 // Zoom abajo a la izquierda para no estorbar al buscador
 L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
+const IMG_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+
+function buildFotoHtmlLazy(url, width, extraStyle) {
+    if (!url) return '';
+    const w = width || 150;
+    const style = `border-radius:8px;${extraStyle ? ' ' + extraStyle : ''}`;
+    return `<img data-src="${url}" src="${IMG_PLACEHOLDER}" width="${w}" loading="lazy" style="${style}">`;
+}
+
+map.on('popupopen', function(e) {
+    const el = e && e.popup && e.popup.getElement ? e.popup.getElement() : null;
+    if (!el) return;
+    const imgs = el.querySelectorAll('img[data-src]');
+    imgs.forEach(img => {
+        const src = img.getAttribute('data-src');
+        if (src) img.src = src;
+        img.removeAttribute('data-src');
+    });
+});
+
 // Visualizar/windows legacy removed — UI simplificada con botones independientes
 
 // --- BUSCADOR (GEOCODER) ---
@@ -414,29 +434,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Render paleta
     renderPaleta();
 
-    // Intento de precargar GeoJSON de departamentos desde el archivo incluido (root) o carpeta data
-    fetchGeoJSON('peru_departamental_simple.geojson').then(geo => {
-        if (geo) {
-            departamentosGeoJSON = geo;
-            console.log('Departamentos GeoJSON precargado desde root.');
-        } else {
-            fetchGeoJSON('data/peru_departamental_simple.geojson').then(geo2 => {
-                if (geo2) { departamentosGeoJSON = geo2; console.log('Departamentos GeoJSON precargado desde data/.'); }
-            });
-        }
-    });
-
-    // Intento de precargar GeoJSON de provincias (root y data)
-    fetchGeoJSON('peru_provincial_simple.geojson').then(geo => {
-        if (geo) {
-            provinciasGeoJSON = geo;
-            console.log('Provincias GeoJSON precargado desde root.');
-        } else {
-            fetchGeoJSON('data/peru_provincial_simple.geojson').then(geo2 => {
-                if (geo2) { provinciasGeoJSON = geo2; console.log('Provincias GeoJSON precargado desde data/.'); }
-            });
-        }
-    });
+    // GeoJSON se carga bajo demanda cuando el usuario activa un modo
 
     const agregarBtn = document.getElementById('agregar-color');
     if (agregarBtn) agregarBtn.addEventListener('click', () => {
@@ -585,6 +583,18 @@ document.addEventListener('DOMContentLoaded', function() {
             btnAnadir.classList.remove('active');
         }
     }
+        function showAllModeButtons() {
+            [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
+                if (b) b.style.display = '';
+            });
+        }
+
+        function showOnlyModeButton(activeBtn) {
+            [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
+                if (!b) return;
+                b.style.display = b === activeBtn ? '' : 'none';
+            });
+        }
     console.log('UI init: mode buttons?', !!btnDeps, !!btnProvs, !!btnSedes);
 
     // Función para limpiar completamente el mapa (sin sedes)
@@ -607,6 +617,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (btnDeps) { btnDeps.textContent = 'Departamentos'; btnDeps.classList.remove('active'); }
         if (btnProvs) { btnProvs.textContent = 'Provincias'; btnProvs.classList.remove('active'); }
         if (btnSedes) { btnSedes.textContent = 'Sedes'; btnSedes.classList.remove('active'); }
+        showAllModeButtons();
     }
 
     // Función para volver a la vista por defecto (sedes aprobadas)
@@ -622,7 +633,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Mostrar solo puntos aprobados
         puntosLayerGroup.clearLayers();
         puntosData.filter(p => p.estado === 'aprobado').forEach(p => {
-            const fotoHtml = p.foto_url ? `<img src="${p.foto_url}" width="150px" style="border-radius:8px;">` : '';
+            const fotoHtml = buildFotoHtmlLazy(p.foto_url, 150);
             const m = L.marker([p.latitud, p.longitud]).bindPopup(`<div style="text-align:center;"><b>${p.descripcion || 'Zona de Calistenia'}</b><br>${fotoHtml}</div>`);
             puntosLayerGroup.addLayer(m);
         });
@@ -635,6 +646,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (btnDeps) { btnDeps.textContent = 'Departamentos'; btnDeps.classList.remove('active'); }
         if (btnProvs) { btnProvs.textContent = 'Provincias'; btnProvs.classList.remove('active'); }
         if (btnSedes) { btnSedes.textContent = 'Sedes'; btnSedes.classList.remove('active'); }
+        showAllModeButtons();
     }
 
     // iniciar sin mostrar ventanas legacy — ahora usamos botones independientes para cada modo
@@ -655,6 +667,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Activar modo departamentos
             btnDeps.textContent = 'Cancelar';
             setMode('departamentos');
+            showOnlyModeButton(btnDeps);
         }
     });
     if (btnProvs) btnProvs.addEventListener('click', () => { 
@@ -667,6 +680,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Activar modo provincias
             btnProvs.textContent = 'Cancelar';
             setMode('provincias');
+            showOnlyModeButton(btnProvs);
         }
     });
     if (btnSedes) btnSedes.addEventListener('click', async () => {
@@ -674,7 +688,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Si ya está activo (dice "Cancelar"), volver a vista default (solo aprobados)
         if (btnSedes.textContent === 'Cancelar') {
-            volverVistaDefault();
+            limpiarMapaCompleto();
         } else {
             // Activar modo: mostrar TODOS los puntos (aprobados + pendientes)
             // Limpiar capas geográficas
@@ -688,7 +702,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Mostrar TODOS los puntos (aprobados + pendientes)
             puntosLayerGroup.clearLayers();
             puntosData.forEach(p => {
-                const fotoHtml = p.foto_url ? `<img src="${p.foto_url}" width="150px" style="border-radius:8px;">` : '';
+                const fotoHtml = buildFotoHtmlLazy(p.foto_url, 150);
                 if (p.estado === 'aprobado') {
                     const m = L.marker([p.latitud, p.longitud]).bindPopup(`<div style="text-align:center;"><b>${p.descripcion || 'Zona de Calistenia'}</b><br>${fotoHtml}</div>`);
                     puntosLayerGroup.addLayer(m);
@@ -704,6 +718,7 @@ document.addEventListener('DOMContentLoaded', function() {
             currentMode = 'sedes_all';
             btnSedes.textContent = 'Cancelar';
             btnSedes.classList.add('active');
+            showOnlyModeButton(btnSedes);
             
             // Resetear botones de departamentos/provincias
             if (btnDeps) { btnDeps.textContent = 'Departamentos'; btnDeps.classList.remove('active'); }
@@ -720,10 +735,12 @@ document.addEventListener('DOMContentLoaded', function() {
             currentMode = 'add';
             // desactivar otros botones visuales
             [btnDeps, btnProvs, btnSedes].forEach(b => b && b.classList.remove('active'));
+            showOnlyModeButton(btnAnadir);
         } else {
             // desactivar modo añadir
             document.body.classList.remove('adding-mode');
             currentMode = '';
+            showAllModeButtons();
         }
         updateAddButtonUI();
     });
@@ -1204,8 +1221,27 @@ async function cargarPuntosAprobados() {
     }
 }
 
+async function ensureGeoJSONForDetection() {
+    const deptPaths = ['peru_departamental_simple.geojson', 'data/peru_departamental_simple.geojson'];
+    const provPaths = ['peru_provincial_simple.geojson', 'data/peru_provincial_simple.geojson'];
+
+    if (!departamentosGeoJSON) {
+        for (const p of deptPaths) {
+            const geo = await fetchGeoJSON(p);
+            if (geo) { departamentosGeoJSON = geo; break; }
+        }
+    }
+    if (!provinciasGeoJSON) {
+        for (const p of provPaths) {
+            const geo = await fetchGeoJSON(p);
+            if (geo) { provinciasGeoJSON = geo; break; }
+        }
+    }
+}
+
 // Al enviar el formulario, si existe provinciasGeoJSON, detectar provincia/departamento
 async function detectarProvinciaDepartamento(lat, lng) {
+    await ensureGeoJSONForDetection();
     const pt = turf.point([lng, lat]);
     const fuentes = [];
     if (provinciasGeoJSON) fuentes.push({geo: provinciasGeoJSON, tipo: 'provincia'});
@@ -1435,7 +1471,7 @@ let ultimoRegistro = {
 
 // Función para agregar marcador de preview pendiente
 function agregarMarcadorPendiente(latitud, longitud, descripcion, nombre_persona, foto_url) {
-    const fotoHtml = foto_url ? `<img src="${foto_url}" width="150px" style="border-radius:8px; display:block; margin:10px auto;">` : '';
+    const fotoHtml = buildFotoHtmlLazy(foto_url, 150, 'display:block; margin:10px auto;');
     // Crear marcador semitransparente y añadirlo al layer group de puntos
     const marcador = L.marker([latitud, longitud], { opacity: 0.6, title: 'Pendiente de validación' })
         .bindPopup(`<div style="text-align:center; opacity:0.9;"><b style="color:#f39c12;">⏳ ${descripcion}</b><br><small style="color:#666;">Subido por: ${nombre_persona}</small><br>${fotoHtml}<br><small style="color:#f39c12; font-weight:bold;">En revisión</small></div>`);
