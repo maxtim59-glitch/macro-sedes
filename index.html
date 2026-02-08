@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' fill='%232c3e50'/%3E%3C/svg%3E">
+    <title>Mapa de patrocinio</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <!-- Botones de Modo: Departamentos / Provincias / Sedes (reemplaza Visualizar) -->
+    <div id="mode-buttons" class="mode-buttons">
+        <button id="btn-departamentos" class="btn-visualizar" title="Mostrar Departamentos" type="button">Departamentos</button>
+        <button id="btn-provincias" class="btn-visualizar" title="Mostrar Provincias" type="button">Provincias</button>
+        <button id="btn-sedes" class="btn-visualizar" title="Mostrar Sedes" type="button">Sedes</button>
+        <button id="btn-anadir" class="btn-visualizar" title="Añadir Zona" type="button">Añadir</button>
+    </div>
+
+    <!-- Panel de control eliminado por petición del usuario -->
+    
+
+    <!-- MODAL DE CARGA Y ÉXITO -->
+    <div id="modal-exito" class="modal-exito" style="display:none;">
+        <div class="exito-contenedor">
+            <div class="spinner-carga" id="spinner-carga"></div>
+            <div class="check-exito" id="check-exito" style="display:none;">✓</div>
+        </div>
+    </div>
+
+    <!-- MODAL FLOTANTE PARA FORMULARIO -->
+    <div id="modal-formulario" class="modal-overlay" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Registrar Nueva Zona</h2>
+                <button type="button" class="modal-close" onclick="cerrarModal()" title="Cerrar">&times;</button>
+            </div>
+            
+            <form id="formulario-zona">
+                <div class="form-group">
+                    <label for="descripcion">Descripción de la Zona:</label>
+                    <input type="text" id="descripcion" placeholder="Ej: Parque central, esquina" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="tipoAnuncio">Tipo de Anuncio:</label>
+                    <select id="tipoAnuncio" required>
+                        <option value="">Selecciona una opción</option>
+                        <option value="Volante">Volante</option>
+                        <option value="Banner">Banner</option>
+                        <option value="Póster">Póster</option>
+                        <option value="Otro">Otro</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="persona">Promotor:</label>
+                    <input type="text" id="persona" placeholder="Tu nombre completo" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="foto">Seleccionar Imagen:</label>
+                    <div class="file-input-wrapper">
+                        <input type="file" id="foto" accept="image/*" required>
+                        <span id="nombre-archivo">Ningún archivo seleccionado</span>
+                    </div>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn-cancelar" onclick="cerrarModal()">Cancelar</button>
+                    <button type="submit" class="btn-confirmar">Enviar Registro</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <script src="script.js"></script>
+</body>
+</html>

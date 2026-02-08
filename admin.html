@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Admin - Validación de Puntos</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: white; padding: 20px; margin: 0; }
+        .container { max-width: 1000px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 12px; border-top: 5px solid #27ae60; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        h1 { color: #27ae60; text-align: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #252525; }
+        th, td { padding: 15px; border-bottom: 1px solid #444; text-align: left; }
+        th { background: #27ae60; color: white; text-transform: uppercase; font-size: 0.9em; }
+        .btn { border: none; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-weight: bold; color: white; margin: 2px; transition: 0.2s; }
+        .btn-aprobar { background: #27ae60; }
+        .btn-aprobar:hover { background: #219150; }
+        .btn-rechazar { background: #e67e22; }
+        .btn-eliminar { background: #c0392b; }
+        .badge { padding: 5px 10px; border-radius: 20px; font-size: 0.8em; text-transform: uppercase; font-weight: bold; }
+        .pendiente { background: #f1c40f; color: black; }
+        .aprobado { background: #27ae60; }
+        .rechazado { background: #e67e22; }
+        img { border-radius: 4px; transition: 0.3s; cursor: zoom-in; object-fit: cover; }
+        img:hover { transform: scale(4); position: relative; z-index: 100; border: 2px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
+        .login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #1a1a1a; display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .login-box { text-align: center; background: #2d2d2d; padding: 40px; border-radius: 15px; border: 1px solid #444; }
+        input[type="password"] { padding: 12px; border-radius: 5px; border: 1px solid #444; background: #1a1a1a; color: white; margin-bottom: 20px; width: 200px; display: block; }
+    </style>
+</head>
+<body>
+
+<div id="login" class="login-overlay">
+    <div class="login-box">
+        <h2>Acceso Restringido</h2>
+        <input type="password" id="pass" placeholder="Contraseña de Admin">
+        <button class="btn btn-aprobar" onclick="verificar()">Entrar al Panel</button>
+    </div>
+</div>
+
+<div class="container">
+    <h1>Validación de Zonas de Calistenia</h1>
+    <p style="text-align: center; color: #aaa;">Gestiona los reportes recibidos desde el mapa.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Foto</th>
+                <th>Detalles del Punto</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody id="tabla-puntos"></tbody>
+    </table>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+    // Configuración de Supabase
+    const SUPABASE_URL = 'https://afzevcxtdhoktzsjckie.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_T7vPHcunOH0prZbYeiJoew_n_viACXt';
+    const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    function verificar() {
+        const p = document.getElementById('pass').value;
+        if (p === "ADMIN2026") { 
+            document.getElementById('login').style.display = 'none';
+            cargarReporte();
+        } else {
+            alert("Clave incorrecta");
+        }
+    }
+
+    // Helper para cargar datos de Supabase
+    function getPuntosLocal() {
+        return JSON.parse(localStorage.getItem('macro_puntos') || '[]');
+    }
+    function setPuntosLocal(arr) {
+        localStorage.setItem('macro_puntos', JSON.stringify(arr));
+    }
+
+    async function cargarReporte() {
+        try {
+            const { data, error } = await _supabase.from('macro_puntos').select('*').order('id', { ascending: false });
+            
+            if (error) {
+                alert('Error cargando puntos: ' + error.message);
+                return;
+            }
+
+            const tbody = document.getElementById('tabla-puntos');
+            tbody.innerHTML = "";
+
+            if (data && data.length) {
+                data.forEach(p => {
+                    const foto = p.foto_url ? `<img src="${p.foto_url}" width="60" height="60" title="Pasa el mouse para ampliar">` : '<i>Sin foto</i>';
+                    const titulo = p.descripcion || p.nombre_patrocinador || "Zona sin descripción";
+                    const sublinea = `<br><small style="color:#bbb;">Subido por: <b>${p.nombre_persona || 'Anónimo'}</b> | Tipo: ${p.tipo_anuncio || 'N/A'}</small>`;
+                    const motivoRechazo = p.mensaje_adm ? `<br><small style="color:#ff9f43;">Nota Admin: ${p.mensaje_adm}</small>` : '';
+                    tbody.innerHTML += `
+                    <tr>
+                        <td>${foto}</td>
+                        <td>
+                            <span style="color:#27ae60; font-weight:bold; font-size:1.1em;">${titulo}</span>
+                            ${sublinea}
+                            ${motivoRechazo}
+                        </td>
+                        <td><span class="badge ${p.estado}">${p.estado}</span></td>
+                        <td>
+                            ${p.estado === 'pendiente' ? `<button class="btn btn-aprobar" onclick="actualizar(${p.id}, 'aprobado')">Aprobar ✅</button>` : ''}
+                            <button class="btn btn-rechazar" onclick="rechazar(${p.id})">Rechazar ✖</button>
+                            <button class="btn btn-eliminar" onclick="eliminar(${p.id})">Eliminar 🗑</button>
+                        </td>
+                    </tr>
+                `;
+                });
+            } else {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#aaa;">No hay reportes pendientes.</td></tr>`;
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    async function actualizar(id, nuevoEstado) {
+        try {
+            const { error } = await _supabase.from('macro_puntos').update({ estado: nuevoEstado }).eq('id', id);
+            
+            if (error) {
+                alert('Error actualizando: ' + error.message);
+                return;
+            }
+            
+            alert('✅ Punto ' + nuevoEstado);
+            cargarReporte();
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    async function rechazar(id) {
+        const motivo = prompt("Motivo del rechazo:");
+        if (!motivo) return;
+        
+        try {
+            const { error } = await _supabase.from('macro_puntos').update({ 
+                estado: 'rechazado',
+                mensaje_adm: motivo 
+            }).eq('id', id);
+            
+            if (error) {
+                alert('Error rechazando: ' + error.message);
+                return;
+            }
+            
+            alert('❌ Punto rechazado');
+            cargarReporte();
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+
+    async function eliminar(id) {
+        if (!confirm("¿Estás seguro de eliminar permanentemente este registro?")) return;
+        
+        try {
+            const { error } = await _supabase.from('macro_puntos').delete().eq('id', id);
+            
+            if (error) {
+                alert('Error eliminando: ' + error.message);
+                return;
+            }
+            
+            alert('🗑 Registro eliminado');
+            cargarReporte();
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    }
+</script>
+</body>
+</html>
