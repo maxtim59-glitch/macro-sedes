@@ -115,8 +115,11 @@ let provinciasLayer = null;
 let provinciasGeoJSON = null;
 let departamentosLayer = null;
 let departamentosGeoJSON = null;
-let paletaColores = JSON.parse(localStorage.getItem('macro_colores') || '[]');
-let asignacionesProvincia = JSON.parse(localStorage.getItem('macro_prov_colors') || '{}');
+let paletaColores = [];
+let asignacionesProvincia = {};
+const COLOR_CONFIG_TABLE = 'macro_color_config';
+const COLOR_CONFIG_ID = 1;
+let colorSaveTimer = null;
 let puntosData = []; // guardará puntos cargados desde supabase
 let currentMode = ''; // modos: 'sedes'|'provincias'|'departamentos' | empty = ninguno
 // LayerGroup para los marcadores de puntos (no se muestran hasta pulsar Sedes)
@@ -124,6 +127,82 @@ let puntosLayerGroup = L.layerGroup();
 let puntosVisible = false;
 let lastModeBeforeSedes = '';
 let addMode = false;
+
+function loadColorConfigFromLocal() {
+    const paleta = JSON.parse(localStorage.getItem('macro_colores') || '[]');
+    const asignaciones = JSON.parse(localStorage.getItem('macro_prov_colors') || '{}');
+    return { paleta, asignaciones };
+}
+
+function aplicarColoresSedesDesdeConfig() {
+    Object.keys(asignacionesProvincia || {}).forEach(key => {
+        if (key.startsWith('SEDE:')) {
+            const name = key.replace('SEDE:', '');
+            const cfg = asignacionesProvincia[key] || {};
+            if (!SEDES[name]) SEDES[name] = { color: cfg.color || '#27ae60', deps: [] };
+            if (cfg.color) SEDES[name].color = cfg.color;
+        }
+    });
+}
+
+async function cargarColoresGlobales() {
+    const local = loadColorConfigFromLocal();
+    try {
+        const { data, error } = await _supabase
+            .from(COLOR_CONFIG_TABLE)
+            .select('paleta, asignaciones')
+            .eq('id', COLOR_CONFIG_ID)
+            .maybeSingle();
+
+        if (error) throw error;
+
+        if (data && (data.paleta || data.asignaciones)) {
+            paletaColores = Array.isArray(data.paleta) ? data.paleta : (local.paleta || []);
+            asignacionesProvincia = data.asignaciones || local.asignaciones || {};
+        } else {
+            paletaColores = local.paleta || [];
+            asignacionesProvincia = local.asignaciones || {};
+            if ((paletaColores && paletaColores.length) || Object.keys(asignacionesProvincia).length) {
+                scheduleGuardarColores();
+            }
+        }
+    } catch (e) {
+        console.warn('No se pudo cargar colores globales, usando cache local.', e && e.message);
+        paletaColores = local.paleta || [];
+        asignacionesProvincia = local.asignaciones || {};
+    }
+
+    aplicarColoresSedesDesdeConfig();
+}
+
+async function guardarColoresGlobales() {
+    const payload = {
+        id: COLOR_CONFIG_ID,
+        paleta: paletaColores || [],
+        asignaciones: asignacionesProvincia || {},
+        updated_at: new Date().toISOString()
+    };
+
+    try {
+        const { error } = await _supabase
+            .from(COLOR_CONFIG_TABLE)
+            .upsert(payload, { onConflict: 'id' });
+        if (error) throw error;
+    } catch (e) {
+        console.warn('No se pudo guardar colores globales, guardando solo cache local.', e && e.message);
+    }
+
+    localStorage.setItem('macro_colores', JSON.stringify(paletaColores || []));
+    localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia || {}));
+}
+
+function scheduleGuardarColores() {
+    if (colorSaveTimer) clearTimeout(colorSaveTimer);
+    colorSaveTimer = setTimeout(() => {
+        colorSaveTimer = null;
+        guardarColoresGlobales();
+    }, 400);
+}
 
 // GeoJSON embebido de ejemplo (simplificado). Reemplazar por uno real cuando se tenga.
 const ejemploDepartamentos = {
@@ -394,7 +473,7 @@ function setAreaColor(name, type, colorObj) {
                     }
                 }
             });
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
         }
     }
     if (type === 'provincia' && provinciasLayer) {
@@ -430,7 +509,8 @@ function setAreaColor(name, type, colorObj) {
 }
 
 // Inicializar UI de paleta y archivo
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
+    await cargarColoresGlobales();
     // Render paleta
     renderPaleta();
 
@@ -441,7 +521,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const color = document.getElementById('color-input').value;
         const nombre = document.getElementById('color-nombre').value || color;
         paletaColores.push({ color, nombre });
-        localStorage.setItem('macro_colores', JSON.stringify(paletaColores));
+        scheduleGuardarColores();
         renderPaleta();
         document.getElementById('color-nombre').value = '';
     });
@@ -767,7 +847,7 @@ function openColorEditor(name, type, parentEl) {
                 const key = type === 'macro' ? 'MACRO:' + name : name;
                 asignacionesProvincia[key] = { color, nombre };
             }
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
             setAreaColor(name, type, { color, nombre });
             // actualizar UI
             renderPaleta();
@@ -780,7 +860,7 @@ function renderPaleta() {
     // Si el contenedor no existe (p. ej. en admin.html) no hacemos nada
     if (!cont) return;
     // Asegurar que la paleta esté inicializada
-    paletaColores = paletaColores || JSON.parse(localStorage.getItem('macro_colores') || '[]');
+    paletaColores = paletaColores || [];
     cont.innerHTML = '';
     paletaColores.forEach((c, idx) => {
         const div = document.createElement('div');
@@ -792,7 +872,7 @@ function renderPaleta() {
         btn.addEventListener('click', (e) => {
             const i = Number(e.target.dataset.idx);
             paletaColores.splice(i,1);
-            localStorage.setItem('macro_colores', JSON.stringify(paletaColores));
+            scheduleGuardarColores();
             renderPaleta();
         });
     });
@@ -965,7 +1045,7 @@ function openDepartamentosPanel() {
             const assigned = asignacionesProvincia[nm] || {};
             assigned.color = col;
             asignacionesProvincia[nm] = assigned;
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
             if (assigned.split && assigned.color2) {
                 setAreaColor(nm, 'departamento', { color: assigned.color, color2: assigned.color2, split: true, nombre: nm });
                 const sw = document.querySelector(`#win-departamentos-list .fw-item[data-name='${nm}'] .swatch`);
@@ -986,7 +1066,7 @@ function openDepartamentosPanel() {
             assigned.color2 = col2;
             assigned.split = true;
             asignacionesProvincia[nm] = assigned;
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
             setAreaColor(nm, 'departamento', { color: assigned.color || col2, color2: col2, split: true, nombre: nm });
             const sw = document.querySelector(`#win-departamentos-list .fw-item[data-name='${nm}'] .swatch`);
             if (sw) sw.style.background = `linear-gradient(90deg, ${assigned.color || col2} 0% 50%, ${col2} 50% 100%)`;
@@ -1002,7 +1082,7 @@ function openDepartamentosPanel() {
             assigned.split = !assigned.split;
             if (!assigned.color2) assigned.color2 = assigned.color || '#ffffff';
             asignacionesProvincia[nm] = assigned;
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
             const c2inp = item.querySelector('.dep-color2-input');
             const c1inp = item.querySelector('.dep-color-input');
             const sw = item.querySelector('.swatch');
@@ -1114,7 +1194,7 @@ function openProvinciasPanel() {
             assigned.color = col;
             // if split active keep color2
             asignacionesProvincia[nm] = assigned;
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
             // apply either single color or gradient depending on split flag
             if (assigned.split && assigned.color2) {
                 setAreaColor(nm, 'provincia', { color: assigned.color, color2: assigned.color2, split: true, nombre: nm });
@@ -1137,7 +1217,7 @@ function openProvinciasPanel() {
             assigned.color2 = col2;
             assigned.split = true;
             asignacionesProvincia[nm] = assigned;
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
             setAreaColor(nm, 'provincia', { color: assigned.color || col2, color2: col2, split: true, nombre: nm });
             const sw = document.querySelector(`#win-provincias-list .fw-item[data-name='${nm}'] .swatch`);
             if (sw) sw.style.background = `linear-gradient(90deg, ${assigned.color || col2} 0% 50%, ${col2} 50% 100%)`;
@@ -1153,7 +1233,7 @@ function openProvinciasPanel() {
             assigned.split = !assigned.split;
             if (!assigned.color2) assigned.color2 = assigned.color || '#ffffff';
             asignacionesProvincia[nm] = assigned;
-            localStorage.setItem('macro_prov_colors', JSON.stringify(asignacionesProvincia));
+            scheduleGuardarColores();
             const c2inp = item.querySelector('.prov-color2-input');
             const c1inp = item.querySelector('.prov-color-input');
             const sw = item.querySelector('.swatch');
