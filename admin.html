@@ -23,7 +23,10 @@
         img:hover { transform: scale(4); position: relative; z-index: 100; border: 2px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
         .login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #1a1a1a; display: flex; align-items: center; justify-content: center; z-index: 1000; }
         .login-box { text-align: center; background: #2d2d2d; padding: 40px; border-radius: 15px; border: 1px solid #444; }
-        input[type="password"] { padding: 12px; border-radius: 5px; border: 1px solid #444; background: #1a1a1a; color: white; margin-bottom: 20px; width: 200px; display: block; }
+        .login-box input { padding: 12px; border-radius: 5px; border: 1px solid #444; background: #1a1a1a; color: white; margin-bottom: 16px; width: 240px; display: block; }
+        .top-actions { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+        .btn-salir { background: #555; }
+        .btn-salir:hover { background: #666; }
     </style>
 </head>
 <body>
@@ -31,12 +34,16 @@
 <div id="login" class="login-overlay">
     <div class="login-box">
         <h2>Acceso Restringido</h2>
-        <input type="password" id="pass" placeholder="Contraseña de Admin">
+        <input type="email" id="admin-email" placeholder="Correo de Admin" autocomplete="username">
+        <input type="password" id="admin-pass" placeholder="Contraseña" autocomplete="current-password">
         <button class="btn btn-aprobar" onclick="verificar()">Entrar al Panel</button>
     </div>
 </div>
 
 <div class="container">
+    <div class="top-actions">
+        <button class="btn btn-salir" onclick="cerrarSesion()">Cerrar sesion</button>
+    </div>
     <h1>Validación de Zonas de Calistenia</h1>
     <p style="text-align: center; color: #aaa;">Gestiona los reportes recibidos desde el mapa.</p>
     <table>
@@ -59,15 +66,40 @@
     const SUPABASE_KEY = 'sb_publishable_T7vPHcunOH0prZbYeiJoew_n_viACXt';
     const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    function verificar() {
-        const p = document.getElementById('pass').value;
-        if (p === "ADMIN2026") { 
+    async function verificar() {
+        const email = document.getElementById('admin-email').value.trim();
+        const password = document.getElementById('admin-pass').value;
+        if (!email || !password) {
+            alert('Completa correo y contraseña');
+            return;
+        }
+
+        const { error } = await _supabase.auth.signInWithPassword({ email, password });
+        if (error) {
+            alert('Login fallido: ' + error.message);
+            return;
+        }
+
+        document.getElementById('login').style.display = 'none';
+        cargarReporte();
+    }
+
+    async function cerrarSesion() {
+        await _supabase.auth.signOut();
+        document.getElementById('login').style.display = 'flex';
+    }
+
+    async function verificarSesion() {
+        const { data } = await _supabase.auth.getSession();
+        if (data && data.session) {
             document.getElementById('login').style.display = 'none';
             cargarReporte();
         } else {
-            alert("Clave incorrecta");
+            document.getElementById('login').style.display = 'flex';
         }
     }
+
+    verificarSesion();
 
     // Helper para cargar datos de Supabase
     function getPuntosLocal() {
