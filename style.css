@@ -16,10 +16,15 @@ body {
 /* Panel de control eliminado */
 
 
+/* Botones base */
+.btn-visualizar { background: #2c3e50; color: white; border: none; padding: 10px 14px; border-radius: 10px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+.btn-visualizar:hover { opacity: 0.95; }
+
 /* Botones de modo (derecha abajo, apilados) */
 .mode-buttons { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 1600; }
-.mode-buttons .btn-visualizar { background: #2c3e50; color: white; border: none; padding: 10px 14px; border-radius: 10px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
-.mode-buttons .btn-visualizar:hover { opacity: 0.95; }
+
+/* Boton resultados (arriba derecha) */
+.stats-button { position: fixed; right: 20px; top: 20px; z-index: 1600; }
 
 /* Ventanas flotantes (aparecen a la derecha, encima del botón) */
 .float-window {
@@ -45,6 +50,25 @@ body {
 }
 
 .float-window .fw-body { padding: 10px 12px; max-height: 60vh; overflow-y: auto; }
+
+/* Resultados panel */
+.results-summary { font-size: 13px; color: #444; margin-bottom: 10px; }
+.results-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.results-tab { flex: 1; background: #f2f2f2; border: 1px solid #e2e2e2; border-radius: 8px; padding: 6px 8px; cursor: pointer; font-weight: bold; font-size: 12px; }
+.results-tab.active { background: #27ae60; color: #fff; border-color: #27ae60; }
+.results-list { border: 1px solid #eee; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+.results-item { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; }
+.results-item:last-child { border-bottom: none; }
+.results-item.active { background: #f5fbf7; }
+.results-details { border: 1px solid #eee; border-radius: 8px; padding: 8px 10px; }
+.results-detail-title { font-weight: bold; color: #222; margin-bottom: 4px; }
+.results-detail-meta { font-size: 12px; color: #555; margin-bottom: 6px; }
+.results-detail-color { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #555; margin-bottom: 6px; }
+.results-swatch { width: 24px; height: 14px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.1); display: inline-block; }
+.results-subtitle { font-size: 12px; font-weight: bold; color: #333; margin-top: 6px; margin-bottom: 4px; }
+.results-sublist { font-size: 12px; color: #555; }
+.results-subitem { display: flex; justify-content: space-between; padding: 2px 0; }
+.results-empty { color: #666; font-size: 12px; padding: 8px 4px; }
 
 /* Buscador dentro de las ventanas flotantes */
 .float-window .fw-search {
@@ -87,6 +111,16 @@ body {
 /* Estado al pasar sobre botones o marcadores clicables */
 .leaflet-interactive, .btn-enviar, a {
     cursor: pointer !important;
+}
+
+/* Evitar cursor/hover de seleccion en capas cuando esta activo el modo anadir */
+.adding-mode .leaflet-interactive {
+    cursor: inherit !important;
+    pointer-events: none;
+}
+
+.adding-mode .leaflet-tooltip {
+    display: none !important;
 }
 
 /* Estado ARRASTRANDO: Cambia a la manito cerrada del sistema */
