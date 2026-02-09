@@ -124,9 +124,23 @@ let puntosData = []; // guardará puntos cargados desde supabase
 let currentMode = ''; // modos: 'sedes'|'provincias'|'departamentos' | empty = ninguno
 // LayerGroup para los marcadores de puntos (no se muestran hasta pulsar Sedes)
 let puntosLayerGroup = L.layerGroup();
+let sedesOverlayLayer = L.layerGroup();
+let sedesOverlayVisible = false;
 let puntosVisible = false;
 let lastModeBeforeSedes = '';
 let addMode = false;
+let lastModeBeforeAdd = '';
+let btnDeps = null;
+let btnProvs = null;
+let btnSedes = null;
+let btnAnadir = null;
+let btnResultados = null;
+let resultadosLayerGroup = L.layerGroup();
+let resultadosState = { type: 'departamentos', query: '', selected: '' };
+let resultadosDataCache = null;
+let resultadosPopup = null;
+let resultadosPopupCloseBySelection = false;
+let resultadosPanelOpen = false;
 
 function loadColorConfigFromLocal() {
     const paleta = JSON.parse(localStorage.getItem('macro_colores') || '[]');
@@ -285,6 +299,164 @@ function aplicarSedes() {
     });
 }
 
+function renderSedesOverlay() {
+    sedesOverlayLayer.clearLayers();
+    (puntosData || []).filter(p => p.estado === 'aprobado').forEach(p => {
+        const fotoHtml = buildFotoHtmlLazy(p.foto_url, 150);
+        const m = L.marker([p.latitud, p.longitud]).bindPopup(
+            `<div style="text-align:center;"><b>${p.descripcion || 'Zona de Calistenia'}</b><br>${fotoHtml}</div>`
+        );
+        sedesOverlayLayer.addLayer(m);
+    });
+    if (!map.hasLayer(sedesOverlayLayer)) map.addLayer(sedesOverlayLayer);
+    sedesOverlayVisible = true;
+}
+
+function clearSedesOverlay() {
+    sedesOverlayLayer.clearLayers();
+    if (map.hasLayer(sedesOverlayLayer)) map.removeLayer(sedesOverlayLayer);
+    sedesOverlayVisible = false;
+}
+
+function closeAllTooltips() {
+    if (departamentosLayer) departamentosLayer.eachLayer(l => l.closeTooltip && l.closeTooltip());
+    if (provinciasLayer) provinciasLayer.eachLayer(l => l.closeTooltip && l.closeTooltip());
+}
+
+function updateAddButtonUI() {
+    if (!btnAnadir) return;
+    if (addMode) {
+        btnAnadir.textContent = 'Cancelar';
+        btnAnadir.title = 'Cancelar';
+        btnAnadir.classList.add('active');
+    } else {
+        btnAnadir.textContent = 'Añadir';
+        btnAnadir.title = 'Añadir Zona';
+        btnAnadir.classList.remove('active');
+    }
+}
+
+function showAllModeButtons() {
+    [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
+        if (b) b.style.display = '';
+    });
+}
+
+function showOnlyModeButton(activeBtn) {
+    [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
+        if (!b) return;
+        b.style.display = b === activeBtn ? '' : 'none';
+    });
+}
+
+function showModeWithAddButton(activeBtn) {
+    [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
+        if (!b) return;
+        b.style.display = (b === activeBtn || b === btnAnadir) ? '' : 'none';
+    });
+}
+
+function showModeWithAddAndSedesButtons(activeBtn) {
+    [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
+        if (!b) return;
+        const keep = b === activeBtn || b === btnAnadir || b === btnSedes;
+        b.style.display = keep ? '' : 'none';
+    });
+}
+
+function restoreModeAfterAdd() {
+    if (lastModeBeforeAdd === 'departamentos') {
+        if (btnDeps) btnDeps.classList.add('active');
+        showModeWithAddAndSedesButtons(btnDeps);
+        return;
+    }
+    if (lastModeBeforeAdd === 'provincias') {
+        if (btnProvs) btnProvs.classList.add('active');
+        showModeWithAddAndSedesButtons(btnProvs);
+        return;
+    }
+    if (lastModeBeforeAdd === 'sedes_all' || lastModeBeforeAdd === 'sedes') {
+        if (btnSedes) btnSedes.classList.add('active');
+        showModeWithAddButton(btnSedes);
+        return;
+    }
+    showAllModeButtons();
+}
+
+function setMode(m) {
+    currentMode = m;
+    [btnDeps, btnProvs, btnSedes].forEach(b => b && b.classList.remove('active'));
+    if (m === 'departamentos' && btnDeps) btnDeps.classList.add('active');
+    if (m === 'provincias' && btnProvs) btnProvs.classList.add('active');
+    if (m === 'sedes' && btnSedes) btnSedes.classList.add('active');
+
+    if (provinciasLayer) { map.removeLayer(provinciasLayer); provinciasLayer = null; }
+    if (departamentosLayer) { map.removeLayer(departamentosLayer); departamentosLayer = null; }
+
+    if (m === 'departamentos') {
+        if (departamentosGeoJSON) {
+            loadDepartamentosGeoJSON(departamentosGeoJSON);
+            openDepartamentosPanel();
+        } else {
+            (async () => {
+                const paths = ['peru_departamental_simple.geojson', 'data/peru_departamental_simple.geojson'];
+                for (const p of paths) {
+                    const geo = await fetchGeoJSON(p);
+                    if (geo) { loadDepartamentosGeoJSON(geo); openDepartamentosPanel(); return; }
+                }
+                const fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.accept = '.geojson,application/geo+json,application/json';
+                fileInput.style.display = 'none';
+                document.body.appendChild(fileInput);
+                fileInput.addEventListener('change', async (ev) => {
+                    const f = ev.target.files && ev.target.files[0];
+                    if (!f) {
+                        alert('No se seleccionó archivo.');
+                        document.body.removeChild(fileInput);
+                        return;
+                    }
+                    try {
+                        const text = await f.text();
+                        const geo = JSON.parse(text);
+                        if (geo && geo.features && geo.features.length > 0) {
+                            loadDepartamentosGeoJSON(geo);
+                            openDepartamentosPanel();
+                        } else {
+                            alert('Archivo seleccionado no parece contener un GeoJSON válido de departamentos.');
+                        }
+                    } catch (err) {
+                        alert('Error leyendo GeoJSON: ' + err.message);
+                    }
+                    document.body.removeChild(fileInput);
+                });
+                fileInput.click();
+            })();
+        }
+    } else if (m === 'provincias') {
+        (async () => {
+            const paths = ['peru_provincial_simple.geojson', 'data/peru_provincial_simple.geojson'];
+            for (const p of paths) {
+                const geo = await fetchGeoJSON(p);
+                if (geo) { loadProvinciasGeoJSON(geo); openProvinciasPanel(); return; }
+            }
+            loadProvinciasGeoJSON(ejemploProvincias);
+            openProvinciasPanel();
+        })();
+    } else if (m === 'sedes') {
+        (async () => {
+            const paths = ['peru_departamental_simple.geojson', 'data/peru_departamental_simple.geojson'];
+            let loaded = false;
+            for (const p of paths) {
+                const geo = await fetchGeoJSON(p);
+                if (geo) { loadDepartamentosGeoJSON(geo); loaded = true; break; }
+            }
+            if (!loaded) loadDepartamentosGeoJSON(ejemploDepartamentos);
+            aplicarSedes();
+        })();
+    }
+}
+
 map.on('click', function(e) {
     // Comportamiento según modo: solo abrir modal en modo 'add' (añadir)
     if (currentMode === 'add' || addMode) {
@@ -294,19 +466,13 @@ map.on('click', function(e) {
             modal.style.display = 'flex';
             document.getElementById('formulario-zona').reset();
             document.getElementById('nombre-archivo').textContent = 'Ningún archivo seleccionado';
+            if (btnAnadir) btnAnadir.style.display = 'none';
         }
     } else {
         // en otros modos no abrimos modal al hacer click en el mapa
     }
 });
 
-// Evitar que se abra el modal sin ubicación al hacer clic en otros elementos
-document.addEventListener('click', function(e) {
-    // Evitar abrir modal si no hay ubicación
-    if (!ubicacionActual && e.target.id === 'modal-formulario') {
-        e.target.style.display = 'none';
-    }
-});
 
 // Cerrar Modal - Función global
 function cerrarModal() {
@@ -322,17 +488,15 @@ function cerrarModal() {
         document.body.classList.remove('adding-mode');
         const ba = document.getElementById('btn-anadir');
         if (ba) { ba.textContent = 'Añadir'; ba.title = 'Añadir Zona'; ba.classList.remove('active'); }
+        currentMode = lastModeBeforeAdd || '';
+        if (typeof restoreModeAfterAdd === 'function') restoreModeAfterAdd();
     }
+    if (btnAnadir) btnAnadir.style.display = '';
     // limpiar ubicacion actual para evitar reuso accidental
     ubicacionActual = null;
 }
 
-// Cerrar modal cuando se presiona Escape
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        cerrarModal();
-    }
-})
+// Nota: el modal solo se cierra con la X o el boton Cancelar
 
 // ========== GLOBAL COLOR AND SVG HELPERS ==========
 // (Move these out of DOMContentLoaded so they're accessible everywhere)
@@ -554,127 +718,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
-    const pintarDeptChk = document.getElementById('pintar-departamentos');
-    if (pintarDeptChk) pintarDeptChk.addEventListener('change', function() {
-        aplicarSombreadoDepartamentos(this.checked);
-    });
-
-    // Modos: botones (usar los botones principales en la UI)
-    function setMode(m) {
-        currentMode = m;
-        [btnDeps, btnProvs, btnSedes].forEach(b => b && b.classList.remove('active'));
-        if (m === 'departamentos') btnDeps && btnDeps.classList.add('active');
-        if (m === 'provincias') btnProvs && btnProvs.classList.add('active');
-        if (m === 'sedes') btnSedes && btnSedes.classList.add('active');
-
-        // Limpiar capas existentes
-        if (provinciasLayer) { map.removeLayer(provinciasLayer); provinciasLayer = null; }
-        if (departamentosLayer) { map.removeLayer(departamentosLayer); departamentosLayer = null; }
-
-        // Mostrar la capa correspondiente
-        if (m === 'departamentos') {
-            // Si ya tenemos geo cargado, simplemente aplicarlo y abrir panel
-            if (departamentosGeoJSON) {
-                loadDepartamentosGeoJSON(departamentosGeoJSON);
-                openDepartamentosPanel();
-            } else {
-                // Intentar cargar desde varios lugares: root primero, luego carpeta data
-                (async () => {
-                    const paths = ['peru_departamental_simple.geojson', 'data/peru_departamental_simple.geojson'];
-                    for (const p of paths) {
-                        const geo = await fetchGeoJSON(p);
-                        if (geo) {
-                            loadDepartamentosGeoJSON(geo);
-                            openDepartamentosPanel();
-                            return;
-                        }
-                    }
-                    // Si no existe el GeoJSON, solicitamos al usuario que lo cargue localmente (evita mostrar cuadros de ejemplo)
-                    console.warn('GeoJSON de departamentos no encontrado en paths esperados. Solicitando carga local.');
-                    const fileInput = document.createElement('input');
-                    fileInput.type = 'file';
-                    fileInput.accept = '.geojson,application/geo+json,application/json';
-                    fileInput.style.display = 'none';
-                    document.body.appendChild(fileInput);
-                    fileInput.addEventListener('change', async (ev) => {
-                        const f = ev.target.files && ev.target.files[0];
-                        if (!f) {
-                            alert('No se seleccionó archivo.');
-                            document.body.removeChild(fileInput);
-                            return;
-                        }
-                        try {
-                            const text = await f.text();
-                            const geo = JSON.parse(text);
-                            if (geo && geo.features && geo.features.length > 0) {
-                                loadDepartamentosGeoJSON(geo);
-                                openDepartamentosPanel();
-                            } else {
-                                alert('Archivo seleccionado no parece contener un GeoJSON válido de departamentos.');
-                            }
-                        } catch (err) {
-                            alert('Error leyendo GeoJSON: ' + err.message);
-                        }
-                        document.body.removeChild(fileInput);
-                    });
-                    fileInput.click();
-                })();
-            }
-        } else if (m === 'provincias') {
-            (async () => {
-                const paths = ['peru_provincial_simple.geojson', 'data/peru_provincial_simple.geojson'];
-                for (const p of paths) {
-                    const geo = await fetchGeoJSON(p);
-                    if (geo) { loadProvinciasGeoJSON(geo); openProvinciasPanel(); return; }
-                }
-                // fallback a ejemplo si no encontramos el GeoJSON oficial
-                loadProvinciasGeoJSON(ejemploProvincias);
-                openProvinciasPanel();
-            })();
-        } else if (m === 'sedes') {
-            // Sedes usa departamentos y aplica agrupación y colores
-            (async () => {
-                const paths = ['peru_departamental_simple.geojson', 'data/peru_departamental_simple.geojson'];
-                let loaded = false;
-                for (const p of paths) {
-                    const geo = await fetchGeoJSON(p);
-                    if (geo) { loadDepartamentosGeoJSON(geo); loaded = true; break; }
-                }
-                if (!loaded) loadDepartamentosGeoJSON(ejemploDepartamentos);
-                aplicarSedes();
-            })();
-        }
-    }
-    // Botones de modo (reemplazan la funcionalidad 'Visualizar')
-    const btnDeps = document.getElementById('btn-departamentos');
-    const btnProvs = document.getElementById('btn-provincias');
-    const btnSedes = document.getElementById('btn-sedes');
-    const btnAnadir = document.getElementById('btn-anadir');
-
-    function updateAddButtonUI() {
-        if (!btnAnadir) return;
-        if (addMode) {
-            btnAnadir.textContent = 'Cancelar';
-            btnAnadir.title = 'Cancelar';
-            btnAnadir.classList.add('active');
-        } else {
-            btnAnadir.textContent = 'Añadir';
-            btnAnadir.title = 'Añadir Zona';
-            btnAnadir.classList.remove('active');
-        }
-    }
-        function showAllModeButtons() {
-            [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
-                if (b) b.style.display = '';
-            });
-        }
-
-        function showOnlyModeButton(activeBtn) {
-            [btnDeps, btnProvs, btnSedes, btnAnadir].forEach(b => {
-                if (!b) return;
-                b.style.display = b === activeBtn ? '' : 'none';
-            });
-        }
+    btnDeps = document.getElementById('btn-departamentos');
+    btnProvs = document.getElementById('btn-provincias');
+    btnSedes = document.getElementById('btn-sedes');
+    btnAnadir = document.getElementById('btn-anadir');
+    btnResultados = document.getElementById('btn-resultados');
     console.log('UI init: mode buttons?', !!btnDeps, !!btnProvs, !!btnSedes);
 
     // Función para limpiar completamente el mapa (sin sedes)
@@ -694,7 +742,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         currentMode = '';
         
         // Resetear textos de botones
-        if (btnDeps) { btnDeps.textContent = 'Departamentos'; btnDeps.classList.remove('active'); }
+        if (btnDeps) { btnDeps.textContent = 'Mapa Macroregional'; btnDeps.classList.remove('active'); }
         if (btnProvs) { btnProvs.textContent = 'Provincias'; btnProvs.classList.remove('active'); }
         if (btnSedes) { btnSedes.textContent = 'Sedes'; btnSedes.classList.remove('active'); }
         showAllModeButtons();
@@ -723,22 +771,24 @@ document.addEventListener('DOMContentLoaded', async function() {
         currentMode = 'default';
         
         // Resetear textos de botones
-        if (btnDeps) { btnDeps.textContent = 'Departamentos'; btnDeps.classList.remove('active'); }
+        if (btnDeps) { btnDeps.textContent = 'Mapa Macroregional'; btnDeps.classList.remove('active'); }
         if (btnProvs) { btnProvs.textContent = 'Provincias'; btnProvs.classList.remove('active'); }
         if (btnSedes) { btnSedes.textContent = 'Sedes'; btnSedes.classList.remove('active'); }
         showAllModeButtons();
     }
 
     // iniciar sin mostrar ventanas legacy — ahora usamos botones independientes para cada modo
-    // CARGAR VISTA POR DEFECTO: Sedes aprobadas al iniciar
+    // VISTA POR DEFECTO: mapa limpio (sin sedes)
     cargarPuntosAprobados().then(() => {
-        setTimeout(() => volverVistaDefault(), 500);
+        setTimeout(() => limpiarMapaCompleto(), 500);
     });
 
     // Mode button handlers (replaces old Visualizar/windows flow)
     if (btnDeps) btnDeps.addEventListener('click', () => { 
         // disable add mode if active
         if (addMode) { addMode = false; document.body.classList.remove('adding-mode'); updateAddButtonUI(); }
+            clearSedesOverlay();
+            if (btnSedes) { btnSedes.textContent = 'Mostrar sedes'; btnSedes.classList.remove('active'); }
         
         // Si ya está activo (dice "Cancelar"), limpiar mapa completamente
         if (btnDeps.textContent === 'Cancelar') {
@@ -747,11 +797,13 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Activar modo departamentos
             btnDeps.textContent = 'Cancelar';
             setMode('departamentos');
-            showOnlyModeButton(btnDeps);
+                showModeWithAddAndSedesButtons(btnDeps);
         }
     });
     if (btnProvs) btnProvs.addEventListener('click', () => { 
         if (addMode) { addMode = false; document.body.classList.remove('adding-mode'); updateAddButtonUI(); }
+            clearSedesOverlay();
+            if (btnSedes) { btnSedes.textContent = 'Mostrar sedes'; btnSedes.classList.remove('active'); }
         
         // Si ya está activo (dice "Cancelar"), limpiar mapa completamente
         if (btnProvs.textContent === 'Cancelar') {
@@ -760,10 +812,22 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Activar modo provincias
             btnProvs.textContent = 'Cancelar';
             setMode('provincias');
-            showOnlyModeButton(btnProvs);
+                showModeWithAddAndSedesButtons(btnProvs);
         }
     });
     if (btnSedes) btnSedes.addEventListener('click', async () => {
+            if (currentMode === 'departamentos' || currentMode === 'provincias') {
+                if (sedesOverlayVisible) {
+                    clearSedesOverlay();
+                    btnSedes.textContent = 'Mostrar sedes';
+                    btnSedes.classList.remove('active');
+                } else {
+                    renderSedesOverlay();
+                    btnSedes.textContent = 'Quitar sedes';
+                    btnSedes.classList.add('active');
+                }
+                return;
+            }
         if (addMode) { addMode = false; document.body.classList.remove('adding-mode'); updateAddButtonUI(); }
         
         // Si ya está activo (dice "Cancelar"), volver a vista default (solo aprobados)
@@ -798,10 +862,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             currentMode = 'sedes_all';
             btnSedes.textContent = 'Cancelar';
             btnSedes.classList.add('active');
-            showOnlyModeButton(btnSedes);
+            showModeWithAddButton(btnSedes);
             
             // Resetear botones de departamentos/provincias
-            if (btnDeps) { btnDeps.textContent = 'Departamentos'; btnDeps.classList.remove('active'); }
+            if (btnDeps) { btnDeps.textContent = 'Mapa Macroregional'; btnDeps.classList.remove('active'); }
             if (btnProvs) { btnProvs.textContent = 'Provincias'; btnProvs.classList.remove('active'); }
         }
     });
@@ -812,17 +876,26 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (addMode) {
             // activar modo añadir
             document.body.classList.add('adding-mode');
+            lastModeBeforeAdd = currentMode;
             currentMode = 'add';
             // desactivar otros botones visuales
             [btnDeps, btnProvs, btnSedes].forEach(b => b && b.classList.remove('active'));
+            // cerrar paneles abiertos para no estorbar
+            try { const dp = document.getElementById('win-departamentos-panel'); if (dp) dp.style.display = 'none'; } catch(e) {}
+            try { const pp = document.getElementById('win-provincias-panel'); if (pp) pp.style.display = 'none'; } catch(e) {}
+            closeAllTooltips();
             showOnlyModeButton(btnAnadir);
         } else {
             // desactivar modo añadir
             document.body.classList.remove('adding-mode');
-            currentMode = '';
-            showAllModeButtons();
+            currentMode = lastModeBeforeAdd || '';
+            restoreModeAfterAdd();
         }
         updateAddButtonUI();
+    });
+
+    if (btnResultados) btnResultados.addEventListener('click', async () => {
+        await openResultadosPanel();
     });
 
 });
@@ -884,14 +957,7 @@ function loadProvinciasGeoJSON(geojson) {
     if (provinciasLayer) { map.removeLayer(provinciasLayer); provinciasLayer = null; }
 
     function estilo(feature) {
-        const key = feature.properties && (feature.properties.NOMBPROV || feature.properties.provincia || feature.properties.NOMBRE || feature.properties.NAME) || feature.id || '';
-        const asign = asignacionesProvincia[key];
-        return {
-            color: '#555',
-            weight: 1,
-            fillColor: asign ? asign.color : '#ffffff',
-            fillOpacity: asign ? 0.55 : 0.1
-        };
+        return getDefaultProvinciaStyle(feature);
     }
 
     provinciasLayer = L.geoJSON(geojson, {
@@ -900,6 +966,7 @@ function loadProvinciasGeoJSON(geojson) {
             const nombre = feature.properties && (feature.properties.NOMBPROV || feature.properties.provincia || feature.properties.NOMBRE || feature.properties.NAME) || 'Provincia';
             layer.bindTooltip(nombre, {sticky:true});
             layer.on('click', function() {
+                if (addMode || currentMode === 'add') return;
                 // Abrir panel y enfocar la provincia seleccionada
                 openProvinciasPanel();
                 const nm = nombre;
@@ -925,14 +992,7 @@ function loadDepartamentosGeoJSON(geojson) {
     if (departamentosLayer) { map.removeLayer(departamentosLayer); departamentosLayer = null; }
 
     function estilo(feature) {
-        const key = feature.properties && (feature.properties.NOMBDEP || feature.properties.departamento || feature.properties.NOMBRE || feature.properties.NAME) || feature.id || '';
-        const asign = asignacionesProvincia[key];
-        return {
-            color: '#111',
-            weight: 2,
-            fillColor: asign ? asign.color : '#ffffff',
-            fillOpacity: asign ? 0.55 : 0.08
-        }; 
+        return getDefaultDepartamentoStyle(feature);
     }
 
     departamentosLayer = L.geoJSON(geojson, {
@@ -941,6 +1001,7 @@ function loadDepartamentosGeoJSON(geojson) {
             const nombre = feature.properties && (feature.properties.departamento || feature.properties.NOMBRE || feature.properties.NAME) || 'Departamento';
             layer.bindTooltip(nombre, {sticky:true});
             layer.on('click', function() {
+                if (addMode || currentMode === 'add') return;
                 // Abrir el panel y enfocar el departamento seleccionado para editar color
                 openDepartamentosPanel();
                 const nm = nombre;
@@ -1278,6 +1339,490 @@ function openProvinciasPanel() {
 
     panel.style.display = 'block';
 }
+
+function getDepartamentoFeatureName(feature) {
+    const props = feature && feature.properties ? feature.properties : {};
+    return (props.NOMBDEP || props.departamento || props.NOMBRE || props.NAME || '').trim();
+}
+
+function getProvinciaFeatureName(feature) {
+    const props = feature && feature.properties ? feature.properties : {};
+    return (props.NOMBPROV || props.provincia || props.NOMBRE || props.NAME || '').trim();
+}
+
+function normalizeKey(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function getDefaultDepartamentoStyle(feature) {
+    const key = feature.properties && (feature.properties.NOMBDEP || feature.properties.departamento || feature.properties.NOMBRE || feature.properties.NAME) || feature.id || '';
+    const asign = asignacionesProvincia[key];
+    return {
+        color: '#111',
+        weight: 2,
+        fillColor: asign ? asign.color : '#ffffff',
+        fillOpacity: asign ? 0.55 : 0.08
+    };
+}
+
+function getDefaultProvinciaStyle(feature) {
+    const key = feature.properties && (feature.properties.NOMBPROV || feature.properties.provincia || feature.properties.NOMBRE || feature.properties.NAME) || feature.id || '';
+    const asign = asignacionesProvincia[key];
+    return {
+        color: '#555',
+        weight: 1,
+        fillColor: asign ? asign.color : '#ffffff',
+        fillOpacity: asign ? 0.55 : 0.1
+    };
+}
+
+async function buildResultadosIndex() {
+    const approved = (puntosData || []).filter(p => p.estado === 'aprobado');
+    await ensureGeoJSONForDetection();
+
+    const deptFeatures = (departamentosGeoJSON && departamentosGeoJSON.features) || [];
+    const provFeatures = (provinciasGeoJSON && provinciasGeoJSON.features) || [];
+
+    const deptIndex = new Map();
+    const provIndex = new Map();
+
+    deptFeatures.forEach(f => {
+        const name = getDepartamentoFeatureName(f);
+        if (!name) return;
+        const key = normalizeKey(name);
+        if (!deptIndex.has(key)) {
+            deptIndex.set(key, { name, count: 0, points: [], provincias: new Map() });
+        }
+    });
+
+    provFeatures.forEach(f => {
+        const name = getProvinciaFeatureName(f);
+        if (!name) return;
+        const key = normalizeKey(name);
+        if (!provIndex.has(key)) {
+            provIndex.set(key, { name, count: 0, points: [], departamentos: new Map() });
+        }
+    });
+
+    for (const p of approved) {
+        let deptName = '';
+        let provName = '';
+
+        try {
+            const detected = await detectarProvinciaDepartamento(p.latitud, p.longitud);
+            deptName = detected.departamento || '';
+            provName = detected.provincia || '';
+        } catch (e) {
+            // keep empty if detection fails
+        }
+
+        if (!deptName && p.departamento) deptName = String(p.departamento).trim();
+        if (!provName && p.provincia) provName = String(p.provincia).trim();
+
+        const deptKey = normalizeKey(deptName);
+        const provKey = normalizeKey(provName);
+        const deptItem = deptIndex.get(deptKey) || null;
+        const provItem = provIndex.get(provKey) || null;
+
+        if (deptItem) {
+            deptItem.count += 1;
+            deptItem.points.push(p);
+        }
+        if (provItem) {
+            provItem.count += 1;
+            provItem.points.push(p);
+        }
+        if (deptItem && provItem) {
+            deptItem.provincias.set(provItem.name, (deptItem.provincias.get(provItem.name) || 0) + 1);
+            provItem.departamentos.set(deptItem.name, (provItem.departamentos.get(deptItem.name) || 0) + 1);
+        }
+    }
+
+    const departamentos = Array.from(deptIndex.values()).map(dep => ({
+        name: dep.name,
+        count: dep.count,
+        points: dep.points,
+        provincias: Array.from(dep.provincias.entries()).map(([name, count]) => ({ name, count }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+    })).sort((a, b) => a.name.localeCompare(b.name));
+
+    const provincias = Array.from(provIndex.values()).map(prov => ({
+        name: prov.name,
+        count: prov.count,
+        points: prov.points,
+        departamentos: Array.from(prov.departamentos.entries()).map(([name, count]) => ({ name, count }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+    })).sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+        total: approved.length,
+        deptCount: departamentos.length,
+        provCount: provincias.length,
+        departamentos,
+        provincias
+    };
+}
+
+function getResultadosColorStyle(type, name) {
+    const assigned = asignacionesProvincia[name] || {};
+    if (assigned.split && assigned.color2) {
+        return `linear-gradient(90deg, ${assigned.color || '#d0d0d0'} 0% 50%, ${assigned.color2} 50% 100%)`;
+    }
+    return assigned.color || '#d0d0d0';
+}
+
+function clearResultadosHighlight() {
+    if (departamentosLayer) {
+        departamentosLayer.setStyle((feature) => getDefaultDepartamentoStyle(feature));
+    }
+    if (provinciasLayer) {
+        provinciasLayer.setStyle((feature) => getDefaultProvinciaStyle(feature));
+    }
+}
+
+function applyResultadosIdleView() {
+    if (!resultadosPanelOpen) return;
+    if (departamentosLayer) {
+        departamentosLayer.setStyle({ fillOpacity: 0, opacity: 0, weight: 0 });
+    }
+    if (provinciasLayer) {
+        provinciasLayer.setStyle({ fillOpacity: 0, opacity: 0, weight: 0 });
+    }
+}
+
+function hideResultadosAreas() {
+    if (departamentosLayer) {
+        departamentosLayer.setStyle({ fillOpacity: 0, opacity: 0, weight: 0 });
+    }
+    if (provinciasLayer) {
+        provinciasLayer.setStyle({ fillOpacity: 0, opacity: 0, weight: 0 });
+    }
+}
+
+function findResultadosLayer(type, name) {
+    const target = String(name || '');
+    if (type === 'departamentos' && departamentosLayer) {
+        let found = null;
+        departamentosLayer.eachLayer(layer => {
+            if (found) return;
+            const props = layer.feature && layer.feature.properties || {};
+            const nm = props.NOMBDEP || props.departamento || props.NOMBRE || props.NAME || '';
+            if (String(nm) === target) found = layer;
+        });
+        return found;
+    }
+    if (type === 'provincias' && provinciasLayer) {
+        let found = null;
+        provinciasLayer.eachLayer(layer => {
+            if (found) return;
+            const props = layer.feature && layer.feature.properties || {};
+            const nm = props.NOMBPROV || props.provincia || props.NOMBRE || props.NAME || '';
+            if (String(nm) === target) found = layer;
+        });
+        return found;
+    }
+    return null;
+}
+
+function closeResultadosPopup() {
+    if (resultadosPopup) {
+        resultadosPopupCloseBySelection = true;
+        resultadosPopup.remove();
+        resultadosPopup = null;
+        resultadosPopupCloseBySelection = false;
+    }
+}
+
+function openResultadosPopup(type, item) {
+    closeResultadosPopup();
+    const layer = findResultadosLayer(type, item && item.name);
+    if (!layer || !layer.getBounds) return;
+    const center = layer.getBounds().getCenter();
+    const html = `
+        <div style="min-width:160px;">
+            <div style="font-weight:bold; margin-bottom:4px;">${item.name}</div>
+            <div style="font-size:12px; color:#555;">Sedes: ${item.count}</div>
+        </div>
+    `;
+    resultadosPopup = L.popup({ closeButton: true, autoClose: true })
+        .setLatLng(center)
+        .setContent(html)
+        .openOn(map);
+
+    resultadosPopup.on('remove', () => {
+        if (resultadosPopupCloseBySelection) return;
+        if (resultadosState.selected) {
+            resultadosState.selected = '';
+            updateResultadosPanel();
+            clearResultadosPins();
+            applyResultadosIdleView();
+        }
+    });
+}
+
+async function highlightResultadoArea(type, name) {
+    await ensureGeoJSONForDetection();
+
+    if (type === 'departamentos' && !departamentosLayer && departamentosGeoJSON) {
+        loadDepartamentosGeoJSON(departamentosGeoJSON);
+    }
+    if (type === 'provincias' && !provinciasLayer && provinciasGeoJSON) {
+        loadProvinciasGeoJSON(provinciasGeoJSON);
+    }
+
+    clearResultadosHighlight();
+
+    const assigned = asignacionesProvincia[name] || {};
+    const highlightColor = assigned.color || '#e74c3c';
+
+    if (type === 'departamentos' && provinciasLayer) {
+        provinciasLayer.setStyle({ fillOpacity: 0, opacity: 0, weight: 0 });
+    }
+    if (type === 'provincias' && departamentosLayer) {
+        departamentosLayer.setStyle({ fillOpacity: 0, opacity: 0, weight: 0 });
+    }
+
+    if (type === 'departamentos' && departamentosLayer) {
+        departamentosLayer.eachLayer(layer => {
+            const props = layer.feature && layer.feature.properties || {};
+            const nm = props.NOMBDEP || props.departamento || props.NOMBRE || props.NAME || '';
+            if (String(nm) === String(name)) {
+                layer.setStyle({
+                    color: highlightColor,
+                    weight: 4,
+                    fillColor: highlightColor,
+                    fillOpacity: 0.6,
+                    opacity: 1
+                });
+            } else {
+                layer.setStyle({
+                    fillOpacity: 0,
+                    opacity: 0,
+                    weight: 0
+                });
+            }
+        });
+    }
+
+    if (type === 'provincias' && provinciasLayer) {
+        provinciasLayer.eachLayer(layer => {
+            const props = layer.feature && layer.feature.properties || {};
+            const nm = props.NOMBPROV || props.provincia || props.NOMBRE || props.NAME || '';
+            if (String(nm) === String(name)) {
+                layer.setStyle({
+                    color: highlightColor,
+                    weight: 3,
+                    fillColor: highlightColor,
+                    fillOpacity: 0.6,
+                    opacity: 1
+                });
+            } else {
+                layer.setStyle({
+                    fillOpacity: 0,
+                    opacity: 0,
+                    weight: 0
+                });
+            }
+        });
+    }
+}
+
+function renderResultadosPins(points) {
+    resultadosLayerGroup.clearLayers();
+    (points || []).forEach(p => {
+        const fotoHtml = buildFotoHtmlLazy(p.foto_url, 150);
+        const m = L.marker([p.latitud, p.longitud]).bindPopup(
+            `<div style="text-align:center;"><b>${p.descripcion || 'Zona de Calistenia'}</b><br>${fotoHtml}</div>`
+        );
+        resultadosLayerGroup.addLayer(m);
+    });
+    if (!map.hasLayer(resultadosLayerGroup)) map.addLayer(resultadosLayerGroup);
+}
+
+function clearResultadosPins() {
+    resultadosLayerGroup.clearLayers();
+    if (map.hasLayer(resultadosLayerGroup)) map.removeLayer(resultadosLayerGroup);
+}
+
+function updateResultadosPanel() {
+    const panel = document.getElementById('win-resultados-panel');
+    if (!panel) return;
+    const summaryEl = panel.querySelector('#results-summary');
+    const listEl = panel.querySelector('#results-list');
+    const detailsEl = panel.querySelector('#results-details');
+    const searchEl = panel.querySelector('#results-search');
+    const data = resultadosDataCache || { total: 0, departamentos: [], provincias: [], deptCount: 0, provCount: 0 };
+
+    if (summaryEl) {
+        summaryEl.textContent = `Total sedes: ${data.total} | Departamentos: ${data.deptCount} | Provincias: ${data.provCount}`;
+    }
+
+    if (searchEl) {
+        searchEl.placeholder = resultadosState.type === 'departamentos' ? 'Buscar departamento...' : 'Buscar provincia...';
+        searchEl.value = resultadosState.query || '';
+    }
+
+    if (!listEl || !detailsEl) return;
+    listEl.innerHTML = '';
+    detailsEl.innerHTML = '';
+
+    const items = resultadosState.type === 'departamentos' ? data.departamentos : data.provincias;
+    const q = (resultadosState.query || '').toLowerCase();
+    const filtered = (items || []).filter(it => !q || String(it.name).toLowerCase().includes(q));
+
+    if (!filtered.length) {
+        const empty = document.createElement('div');
+        empty.className = 'results-empty';
+        empty.textContent = 'Sin resultados.';
+        listEl.appendChild(empty);
+        clearResultadosPins();
+        applyResultadosIdleView();
+        return;
+    }
+
+    filtered.forEach(it => {
+        const row = document.createElement('div');
+        row.className = 'results-item';
+        row.dataset.name = it.name;
+
+        const name = document.createElement('span');
+        name.textContent = it.name;
+
+        const count = document.createElement('span');
+        count.textContent = String(it.count);
+
+        row.appendChild(name);
+        row.appendChild(count);
+        if (it.name === resultadosState.selected) row.classList.add('active');
+        row.addEventListener('click', async () => {
+            resultadosState.selected = it.name;
+            updateResultadosPanel();
+            renderResultadosPins(it.points || []);
+            await highlightResultadoArea(resultadosState.type, it.name);
+            openResultadosPopup(resultadosState.type, it);
+        });
+        listEl.appendChild(row);
+    });
+
+    const selectedItem = filtered.find(it => it.name === resultadosState.selected) || null;
+    if (!selectedItem) {
+        const hint = document.createElement('div');
+        hint.className = 'results-empty';
+        hint.textContent = 'Selecciona un item para ver detalles.';
+        detailsEl.appendChild(hint);
+        clearResultadosPins();
+        applyResultadosIdleView();
+        closeResultadosPopup();
+        return;
+    }
+
+    const title = document.createElement('div');
+    title.className = 'results-detail-title';
+    title.textContent = selectedItem.name;
+    detailsEl.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'results-detail-meta';
+    meta.textContent = `Sedes: ${selectedItem.count}`;
+    detailsEl.appendChild(meta);
+
+    const colorRow = document.createElement('div');
+    colorRow.className = 'results-detail-color';
+    const colorLabel = document.createElement('span');
+    colorLabel.textContent = 'Color:';
+    const swatch = document.createElement('span');
+    swatch.className = 'results-swatch';
+    swatch.style.background = getResultadosColorStyle(resultadosState.type, selectedItem.name);
+    colorRow.appendChild(colorLabel);
+    colorRow.appendChild(swatch);
+    detailsEl.appendChild(colorRow);
+
+    const subTitle = document.createElement('div');
+    subTitle.className = 'results-subtitle';
+    subTitle.textContent = resultadosState.type === 'departamentos' ? 'Provincias implicadas' : 'Departamentos implicados';
+    detailsEl.appendChild(subTitle);
+
+    const subList = document.createElement('div');
+    subList.className = 'results-sublist';
+    const subItems = resultadosState.type === 'departamentos' ? selectedItem.provincias : selectedItem.departamentos;
+    (subItems || []).forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'results-subitem';
+        const n = document.createElement('span');
+        n.textContent = s.name;
+        const c = document.createElement('span');
+        c.textContent = String(s.count);
+        row.appendChild(n);
+        row.appendChild(c);
+        subList.appendChild(row);
+    });
+    detailsEl.appendChild(subList);
+}
+
+async function openResultadosPanel() {
+    let panel = document.getElementById('win-resultados-panel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'win-resultados-panel';
+        panel.className = 'float-window';
+        panel.style.top = '70px';
+        panel.style.right = '20px';
+        panel.style.width = '360px';
+        panel.innerHTML = `
+            <div class="fw-header">Resultados <button id="close-resultados-panel" style="background:none;border:none;color:white;font-weight:bold;">X</button></div>
+            <div class="fw-body" id="win-resultados-body">
+                <div id="results-summary" class="results-summary"></div>
+                <div class="results-tabs">
+                    <button class="results-tab active" data-type="departamentos" type="button">Departamentos</button>
+                    <button class="results-tab" data-type="provincias" type="button">Provincias</button>
+                </div>
+                <input type="search" id="results-search" class="fw-search" placeholder="Buscar...">
+                <div id="results-list" class="results-list"></div>
+                <div id="results-details" class="results-details"></div>
+            </div>
+        `;
+        document.body.appendChild(panel);
+
+        const closeBtn = panel.querySelector('#close-resultados-panel');
+        if (closeBtn) closeBtn.addEventListener('click', () => {
+            panel.style.display = 'none';
+            resultadosPanelOpen = false;
+            resultadosState.selected = '';
+            resultadosState.query = '';
+            clearResultadosPins();
+            closeResultadosPopup();
+            hideResultadosAreas();
+        });
+
+        const tabs = panel.querySelectorAll('.results-tab');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                resultadosState.type = tab.dataset.type;
+                resultadosState.query = '';
+                resultadosState.selected = '';
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                updateResultadosPanel();
+                closeResultadosPopup();
+            });
+        });
+
+        const searchEl = panel.querySelector('#results-search');
+        if (searchEl) {
+            searchEl.addEventListener('input', (e) => {
+                resultadosState.query = (e.target.value || '').trim();
+                resultadosState.selected = '';
+                updateResultadosPanel();
+                closeResultadosPopup();
+            });
+        }
+    }
+
+    resultadosDataCache = await buildResultadosIndex();
+    resultadosPanelOpen = true;
+    updateResultadosPanel();
+    panel.style.display = 'block';
+}
 // 4. Cargar Puntos Aprobados y Pendientes desde Supabase
 async function cargarPuntosAprobados() {
     try {
@@ -1323,24 +1868,38 @@ async function ensureGeoJSONForDetection() {
 async function detectarProvinciaDepartamento(lat, lng) {
     await ensureGeoJSONForDetection();
     const pt = turf.point([lng, lat]);
-    const fuentes = [];
-    if (provinciasGeoJSON) fuentes.push({geo: provinciasGeoJSON, tipo: 'provincia'});
-    if (departamentosGeoJSON) fuentes.push({geo: departamentosGeoJSON, tipo: 'departamento'});
-    for (const fuente of fuentes) {
-        for (const feat of fuente.geo.features) {
-            if (feat.geometry) {
-                try {
-                    if (turf.booleanPointInPolygon(pt, feat)) {
-                        const props = feat.properties || {};
-                        const provincia = props.provincia || props.NAME || props.NOMBRE || null;
-                        const departamento = props.departamento || props.DEPARTAMENTO || props.DEPARTAMEN || props.DEPART || null;
-                        return { provincia, departamento };
-                    }
-                } catch (e) { /* ignore geometry errors */ }
-            }
+    let provincia = null;
+    let departamento = null;
+
+    if (provinciasGeoJSON) {
+        for (const feat of provinciasGeoJSON.features) {
+            if (!feat.geometry) continue;
+            try {
+                if (turf.booleanPointInPolygon(pt, feat)) {
+                    const props = feat.properties || {};
+                    provincia = props.NOMBPROV || props.provincia || props.NAME || props.NOMBRE || null;
+                    // Some province GeoJSONs include department info
+                    departamento = props.NOMBDEP || props.departamento || props.DEPARTAMENTO || props.DEPARTAMEN || props.DEPART || departamento;
+                    break;
+                }
+            } catch (e) { /* ignore geometry errors */ }
         }
     }
-    return { provincia: null, departamento: null };
+
+    if (!departamento && departamentosGeoJSON) {
+        for (const feat of departamentosGeoJSON.features) {
+            if (!feat.geometry) continue;
+            try {
+                if (turf.booleanPointInPolygon(pt, feat)) {
+                    const props = feat.properties || {};
+                    departamento = props.NOMBDEP || props.departamento || props.DEPARTAMENTO || props.DEPARTAMEN || props.DEPART || null;
+                    break;
+                }
+            } catch (e) { /* ignore geometry errors */ }
+        }
+    }
+
+    return { provincia, departamento };
 }
 
 // 5. Subir Foto a Supabase Storage
